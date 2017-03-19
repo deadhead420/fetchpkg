@@ -1,0 +1,457 @@
+#!/bin/bash
+########################################################
+### fetchpkg
+### Frontend for pacman / AUR
+###
+### Copyright (C) 2017 Dylan Schacht
+###
+### By: Dylan Schacht (deadhead)
+### Email: deadhead3492@gmail.com
+### Webpage: http://arch-anywhere.org
+###
+### Any questions, comments, or bug reports may be sent to above
+### email address. Enjoy, and keep on using Arch.
+###
+### License: GPL v2.0
+###
+### This program is free software; you can redistribute it and/or
+### modify it under the terms of the GNU General Public License
+### as published by the Free Software Foundation; either version 2
+### of the License, or (at your option) any later version.
+###
+### This program is distributed in the hope that it will be useful,
+### but WITHOUT ANY WARRANTY; without even the implied warranty of
+### MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+### GNU General Public License for more details.
+###
+### You should have received a copy of the GNU General Public License
+### along with this program; if not, write to the Free Software
+### Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+########################################################
+
+get_opts() {
+
+	if (grep -- -n <<<"$@" &>/dev/null) || (grep grep -- --no-color &>/dev/null); then
+		unset R G Y M B U UB CO
+	fi
+	
+	while (true)
+	  do
+		case "$1" in
+			-n|--no-color)	shift
+			;;
+			-h|--help)		usage
+							exit
+			;;
+			-S|--sync)		shift
+							fetch_query="$@"
+							fetch_install
+							break
+			;;
+			-Sua|--update-all)	pac_update=true
+								aur_update=true
+								fetch_update
+								break
+			;;
+			-Su|--update)	pac_update=true
+							fetch_update
+							break
+			;;
+			-R|--remove)	shift
+							remove_pkg "$@"
+							break
+			;;
+			-Rd|--remove-deps)	shift
+								rmdepends=true
+								remove_pkg "$@"
+								break
+			;;
+			"")		menu
+					break
+			;;
+			*)		query="$@"
+					search=true
+					fetch_search
+					break
+			;;
+		esac
+	done
+
+}
+
+menu() {
+
+	fetch_menu
+	
+	case "$input" in
+		1)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Enter name(s) of package(s) to install"
+			echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
+			read fetch_query
+			fetch_install
+		;;
+		2)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Enter name(s) of package(s) to remove"
+			echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
+			read remove
+			remove_pkg "$remove"
+		;;
+		3)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Enter a search query"
+			echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
+			read query
+			search=true
+			fetch_search
+		;;
+		4)	if (which fetchmirrors &>/dev/null); then
+				sudo fetchmirrors
+			else
+				echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}updating mirrors requires fetchmirrors${CO}"
+				echo "${Y} |${M}<${Y}${B}#${G}- ${M}Install fetchmirrors and try again${CO}"
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+				exit 1
+			fi
+		;;
+		5)	pac_update=true
+			aur_update=true
+			fetch_update
+		;;
+		6)	clear
+			exit 0
+		;;
+	esac
+
+}
+
+fetch_install() {
+
+	fetch_repo "$fetch_query"
+	
+	if [ -n "$sync_repo" ]; then
+		sync_install "$sync_repo"
+	fi
+	
+	if [ -n "$build_repo" ]; then
+		build_install "$build_repo"
+	fi
+
+}
+
+fetch_search() {
+
+	if (pacman -Ss $(echo "$query") &>/dev/null); then
+		fetch_input=$(pac_query)
+		fetch_input+=$(echo -e "\n\n$(curl -s "https://aur.archlinux.org/packages/?O=0&K=$query" | grep "<td>\|<td class=" | sed 's/<td>//;s!</td>!!;s!<td class="wrap">!!;s!<a href="/packages/!/aur/!;s!/">.*!!;s/		/ /;s/		/ /;s/<td class="flagged">//;s/%2B/+/g')")
+	else
+		fetch_input=$(curl -s "https://aur.archlinux.org/packages/?O=0&K=$query" | grep "<td>\|<td class=" | sed 's/<td>//;s!</td>!!;s!<td class="wrap">!!;s!<a href="/packages/!/aur/!;s!/">.*!!;s/		/ /;s/		/ /;s/<td class="flagged">//;s/%2B/+/g')
+	fi
+		
+	if [ -z "$fetch_input" ]; then
+		echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$query${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+		exit 1
+	fi
+
+	fetch_list "$fetch_input"
+	fetch_install
+
+
+}
+
+fetch_list() {
+
+	while read -r line
+	  do
+		case "$seq" in
+			"0")	pkg+=( "$line" )
+					seq=1
+			;;
+			"1")	ver+=( "$line" )
+					seq=2
+			;;
+			"2")	vote+=( "$line" )
+					seq=3
+			;;
+			"3")	seq=4
+			;;
+			"4")	des+=( "$line" )
+					seq=5
+			;;
+			"5")	pkg_int=$((pkg_int+1))
+					seq=0 
+			;;
+		esac
+	done <<<"$@"
+	
+	export pkg ver vote des pkg_int
+	echo -e "${Y} |${M}<${Y}${B}#${G}-------------- ${UB}$pkg_int${M} Package(s) Found${G} --------------${Y}${B}#${M}>${Y}|${CO}"
+	
+	until [ "$seq" -eq "$pkg_int" ]
+	  do
+	  	pkg_frmt=$(sed 's!/aur/!aur/!;''s!.*/!'$"${Y}${UB}&${G}!g" <<<${pkg[$seq]})
+	  	pkg_ver=( $(pacman -Q $(echo "${pkg[$seq]}" | sed 's!.*/!!') 2>/dev/null) )
+	  	
+	  	if [ -n "${vote[$seq]}" ]; then
+		  	pkg_update="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}] ${M}[${Y}${U}UPDATE${Y}:${R} ${pkg_ver[1]}${M}]"
+		  	pkg_installed="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}] ${M}[${Y}${U}INSTALLED${Y}:${G} ${pkg_ver[1]}${M}]"
+		  	pkg_new="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}]"
+	  	else
+	  		pkg_update="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [${Y}${U}UPDATE${Y}:${R} ${pkg_ver[1]}${M}]"
+		  	pkg_installed="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [${Y}${U}INSTALLED${Y}:${G} ${pkg_ver[1]}${M}]"
+		  	pkg_new="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}]"
+
+	  	fi
+	  	
+	  	if [ -n "$pkg_ver" ]; then
+	  		if [ "${ver[$seq]}" != "${pkg_ver[1]}" ]; then
+				echo -e "$pkg_update${CO}"
+			else
+				echo -e "$pkg_installed${CO}"
+			fi
+	  	else
+		  	echo -e "$pkg_new${CO}"
+		fi
+
+	  	echo -e "${Y} |${CO}     ${des[$seq]}${CO}"
+		seq=$((seq+1))
+	done
+
+	echo -e "${Y} |${M}<${Y}${B}#${G}-${Y}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${G}-${Y}${B}#${M}>${Y}|${CO}"
+	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}${U}Enter package number(s) to install${M} [${G}${UB}1${G} ${UB}2${G} ${UB}3${M}...] ${G}-${Y}${B}#${M}>${Y}|${CO}"
+	echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
+	read fetch_query
+
+}
+
+pac_query() {
+
+	seq=0
+	while read -r line
+		do
+			case "$seq" in
+				0) 	echo -e "$line" | awk '{print $1"\n"$2}'
+					seq=1
+				;;
+				1) 	echo -e "\n\n$line\n"
+					export pkg_int=$((pkg_int+1))
+					seq=0
+				;;
+			esac
+	done <<<$(pacman -Ss $(echo "$query"))
+	echo
+
+}
+
+fetch_repo() {
+
+	for i in $(echo "$@")
+	  do
+		if "$search" ; then
+			if (grep -w -E '[0-9]{1,4}' <<<"$i" &>/dev/null) && [ "$i" -le "$pkg_int" ]; then
+				if (grep "^/" <<<"${pkg[$((i-1))]}" &>/dev/null); then
+					build_repo+=$(echo "$(sed 's!.*/!!' <<<"${pkg[$((i-1))]}") ")
+				else
+					sync_repo+=$(echo "$(sed 's!.*/!!' <<<"${pkg[$((i-1))]}") ")
+				fi
+			else
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$i${CO}"
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+				exit 1
+			fi
+		elif (pacman -Sp $(echo "$i") &>/dev/null); then
+			sync_repo+="$i "
+		elif ! (curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" | grep "DOCTYPE" &>/dev/null); then
+			build_repo+="$i "
+  		else
+			echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$i${CO}"
+			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+			exit 1
+		fi
+	done
+
+}
+
+sync_install() {
+
+	sudo pacman -Sy $(echo "$@")
+	
+	if [ "$?" -gt "0" ]; then
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to install${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+		exit 1
+	fi
+	
+}
+
+build_install() {
+
+	unset depends makedepends
+	local i
+
+	if [ ! -d "$build_tmp" ]; then
+		mkdir "$build_tmp"
+	fi
+
+	for i in $(echo "$@")
+	  do
+		cd "$build_tmp"
+		curl -s "https://aur.archlinux.org/cgit/aur.git/snapshot/${i}.tar.gz" -o "${i}.tar.gz" -L
+		tar -xf "${i}.tar.gz"
+
+		while (true)
+		  do
+			echo -en "${Y} |\n |${M}-${Y}${B}#${G}> ${M}Would you like to edit the PKGBUILD for ${G}$i ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+			read input
+
+			case "$input" in
+				y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")
+					while (true)
+					  do
+						if [ -z "$EDITOR" ]; then
+							echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Select a text editor.${CO}"
+							echo -en "${Y} |${M}-${Y}${B}#${G}> Edit with: ${CO}"
+							read EDITOR
+						fi
+						
+						$EDITOR "$i"/PKGBUILD 2>/dev/null
+
+						if [ "$?" -gt "0" ]; then
+							echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}editor not found: ${Y}$EDITOR${CO}"
+							unset EDITOR
+						else
+							break
+						fi
+					done
+					break
+				;;
+				n|N|nn|NN|nN|Nn|no|No|NO)
+					break
+				;;
+				*)
+					echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
+				;;
+			esac
+		done
+
+		source "$i"/PKGBUILD 2>/dev/null
+		
+		if [ -n "$depends" ] || [ -n "$makedepends" ]; then
+			depends_list=$(pacman -Sp $(echo "${makedepends[@]} ${depends[@]}") 2>&1)
+
+			if [ "$?" -gt "0" ]; then
+				echo "${Y} |${M}<${Y}${B}#${G}- ${M}Dependency found: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
+				build_install $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//' | tr '\n' ' ')
+			fi
+		fi
+
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Begin installing: ${G}$i${CO}"
+		cd "$build_tmp"/"$i"
+		makepkg -si
+
+		if [ "$?" -eq "0" ]; then
+			cd "$build_tmp"
+			rm -rf "$i" "$i.tar.gz"
+		else
+			echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to install package: ${Y}$i${CO}"
+			echo -en "${Y} |\n |${M}-${Y}${B}#${G}> ${M}Remove temporary package files? ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+			read input
+		
+			case "$input" in
+				y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")
+					cd "$build_tmp"
+					rm -rf "$i" "$i.tar.gz"
+					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Removed temporary package files: ${Y}/$build_tmp/$i${CO}"
+					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+					exit 1
+				;;
+				*)
+					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Temporary package files saved at: ${Y}/$build_tmp/$i${CO}"
+					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+					exit 1
+				;;
+			esac
+		fi
+	done
+
+}
+
+fetch_update() {
+
+	while (true)
+	  do
+		echo -en "${Y} |${M}<${Y}${B}#${G}-\n${Y} |${M}-${Y}${B}#${G}> ${M}Begin system update? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+		read input
+	
+		case "$input" in
+			y|Y|yes|Yes|yY|Yy|yy|YY|"")
+				date --rfc-3339='date'
+				echo -e "${Y} |${M}<${Y}${B}#${G}- Begin update.${CO}"
+				
+				if "$pac_update" ; then
+					sync_update
+				fi
+
+				if "$aur_update" ; then
+					build_update
+				fi
+
+				echo -e "${Y} |${M}<${Y}${B}#${G}- Update complete.${CO}"
+				exit
+			;;
+			n|N|no|No|nN|Nn|nn|NN)
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+				exit
+			;;
+			*)
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
+			;;
+		esac
+	done
+
+}
+
+sync_update() {
+
+	sudo pacman -Syu
+
+	if [ "$?" -gt "0" ]; then
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to update system${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+		exit 1
+	fi
+
+}
+
+build_update() {
+
+	for i in $(pacman -Qm | awk '{print $1}')
+	  do
+	  	rel_ver=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" | grep "pkgver=\|pkgrel=" | sed 's/.*=//' | tr '\n' ' ' | awk '{print $1"-"$2}')
+	  	local_ver=$(pacman -Q $i awk '{print $2}')
+
+	  	if [ "$rel_ver" != "$local_ver" ]; then
+			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for: ${G}$i${CO}"
+			build_install "$i"
+	  	fi
+	done
+
+}
+
+remove_pkg() {
+
+	pkg_err=$(pacman -Q $(echo "$@") 2>&1)
+		
+	if [ "$?" -gt "0" ]; then
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$(grep "error" <<<"$pkg_err" | awk '{print $3}' | tr '\n' ' ')${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+		exit 1
+	fi
+
+	if "$rmdepends" ; then
+		sudo pacman -Rsn "$@"
+	else
+		sudo pacman -R "$@"
+	fi
+
+}
+
+source /etc/fetchpkg.conf
+config
+get_opts "$@"
