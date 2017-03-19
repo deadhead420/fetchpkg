@@ -435,10 +435,12 @@ sync_update() {
 
 build_update() {
 
+	echo -e "${Y} |${M}<${Y}${B}#${G}- Begin AUR update...${CO}"
+
 	for i in $(pacman -Qm | awk '{print $1}')
 	  do
 	  	rel_ver=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" | grep "pkgver=\|pkgrel=" | sed 's/.*=//' | tr '\n' ' ' | awk '{print $1"-"$2}')
-	  	local_ver=$(pacman -Q $i awk '{print $2}')
+	  	local_ver=$(pacman -Q $(echo "$i") | awk '{print $2}')
 
 	  	if [ "$rel_ver" != "$local_ver" ]; then
 			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for: ${G}$i${CO}"
