@@ -31,14 +31,20 @@
 
 get_opts() {
 
-	if (grep -- -n <<<"$@" &>/dev/null) || (grep grep -- --no-color &>/dev/null); then
+	if (grep -- -c <<<"$@" &>/dev/null) || (grep grep -- --no-color &>/dev/null); then
 		unset R G Y M B U UB CO
 	fi
 	
+	if (grep -- -n <<<"$@" &>/dev/null) || (grep grep -- --no-confirm &>/dev/null); then
+		confirm=false
+	fi
+
 	while (true)
 	  do
 		case "$1" in
-			-n|--no-color)	shift
+			-c|--no-color)	shift
+			;;
+			-n|--no-confirm)	shift
 			;;
 			-h|--help)		usage
 							exit
@@ -181,7 +187,7 @@ fetch_list() {
 	done <<<"$@"
 	
 	export pkg ver vote des pkg_int
-	echo -e "${Y} |${M}<${Y}${B}#${G}-------------- ${UB}$pkg_int${M} Package(s) Found${G} --------------${Y}${B}#${M}>${Y}|${CO}"
+	echo -e "${Y} |${M}<${Y}${B}#${G}---------- ${UB}$pkg_int${M} Package(s) Found${G} ----------${Y}${B}#${M}>${Y}|${CO}"
 	
 	until [ "$seq" -eq "$pkg_int" ]
 	  do
@@ -213,8 +219,8 @@ fetch_list() {
 		seq=$((seq+1))
 	done
 
-	echo -e "${Y} |${M}<${Y}${B}#${G}-${Y}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${G}-${Y}${B}#${M}>${Y}|${CO}"
-	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}${U}Enter package number(s) to install${M} [${G}${UB}1${G} ${UB}2${G} ${UB}3${M}...] ${G}-${Y}${B}#${M}>${Y}|${CO}"
+	echo -e "${Y} |${M}<${Y}${B}#${G}----------------------------------------${Y}${B}#${M}>${Y}|${CO}"
+	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}${U}Enter package number(s)${M} [${G}${UB}1${G} ${UB}2${G} ${UB}3${M}...]${CO}"
 	echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
 	read fetch_query
 
@@ -270,8 +276,12 @@ fetch_repo() {
 
 sync_install() {
 
-	sudo pacman -Sy $(echo "$@")
-	
+	if "$confirm" ; then
+		sudo pacman --color auto -Sy $(echo "$@")
+	else
+		sudo pacman --color auto --noconfirm -Sy $(echo "$@")
+	fi
+
 	if [ "$?" -gt "0" ]; then
 		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to install${CO}"
 		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
@@ -295,40 +305,42 @@ build_install() {
 		curl -s "https://aur.archlinux.org/cgit/aur.git/snapshot/${i}.tar.gz" -o "${i}.tar.gz" -L
 		tar -xf "${i}.tar.gz"
 
-		while (true)
-		  do
-			echo -en "${Y} |\n |${M}-${Y}${B}#${G}> ${M}Would you like to edit the PKGBUILD for ${G}$i ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
-			read input
+		if "$confirm" ; then
+			while (true)
+			  do
+				echo -en "${Y} |\n |${M}-${Y}${B}#${G}> ${M}Would you like to edit the PKGBUILD for ${G}$i ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+				read input
 
-			case "$input" in
-				y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")
-					while (true)
-					  do
-						if [ -z "$EDITOR" ]; then
-							echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Select a text editor.${CO}"
-							echo -en "${Y} |${M}-${Y}${B}#${G}> Edit with: ${CO}"
-							read EDITOR
-						fi
-						
-						$EDITOR "$i"/PKGBUILD 2>/dev/null
-
-						if [ "$?" -gt "0" ]; then
-							echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}editor not found: ${Y}$EDITOR${CO}"
-							unset EDITOR
-						else
-							break
-						fi
-					done
-					break
-				;;
-				n|N|nn|NN|nN|Nn|no|No|NO)
-					break
-				;;
-				*)
-					echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
-				;;
-			esac
-		done
+				case "$input" in
+					y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")
+						while (true)
+						  do
+							if [ -z "$EDITOR" ]; then
+								echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Select a text editor.${CO}"
+								echo -en "${Y} |${M}-${Y}${B}#${G}> Edit with: ${CO}"
+								read EDITOR
+							fi
+							
+							$EDITOR "$i"/PKGBUILD 2>/dev/null
+    
+							if [ "$?" -gt "0" ]; then
+								echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}editor not found: ${Y}$EDITOR${CO}"
+								unset EDITOR
+							else
+								break
+							fi
+						done
+						break
+					;;
+					n|N|nn|NN|nN|Nn|no|No|NO)
+						break
+					;;
+					*)
+						echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
+					;;
+				esac
+			done
+		fi
 
 		source "$i"/PKGBUILD 2>/dev/null
 		
@@ -359,12 +371,10 @@ build_install() {
 					rm -rf "$i" "$i.tar.gz"
 					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Removed temporary package files: ${Y}/$build_tmp/$i${CO}"
 					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-					exit 1
 				;;
 				*)
 					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Temporary package files saved at: ${Y}/$build_tmp/$i${CO}"
 					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-					exit 1
 				;;
 			esac
 		fi
@@ -409,8 +419,12 @@ fetch_update() {
 
 sync_update() {
 
-	sudo pacman -Syu
-
+	if "$confirm" ; then
+		sudo pacman -Syu
+	else
+		sudo pacman --noconfirm -Syu
+	fi
+		
 	if [ "$?" -gt "0" ]; then
 		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to update system${CO}"
 		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
@@ -452,6 +466,15 @@ remove_pkg() {
 
 }
 
-source /etc/fetchpkg.conf
+if [ $(basename "$0") = "fetchpkg" ]; then
+	config=/etc/fetchpkg.conf
+else
+	config="fetchpkg.conf"
+fi
+
+pac_update=false
+aur_update=false
+search=false
+source "$config"
 config
 get_opts "$@"
