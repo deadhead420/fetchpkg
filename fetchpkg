@@ -29,22 +29,54 @@
 ### Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 ########################################################
 
+##########################################################################
+### This fucntion is responsible for parsing parameters passed to command
+##########################################################################
 get_opts() {
-
-	if (grep -- -c <<<"$@" &>/dev/null) || (grep grep -- --no-color &>/dev/null); then
+	
+	if (grep -- -o <<<"$@" &>/dev/null) || (grep grep -- --no-color &>/dev/null); then
+		alog "unset color sequences: R G Y M B U UB CO"
 		unset R G Y M B U UB CO
 	fi
 	
-	if (grep -- -n <<<"$@" &>/dev/null) || (grep grep -- --no-confirm &>/dev/null); then
-		confirm=false
-	fi
-
 	while (true)
 	  do
 		case "$1" in
-			-c|--no-color)	shift
+			-c|--cachedir)	if [ -d "$2" ]; then
+								alog "set cache directory to: $2"
+								cache_dir="$2"
+								shift ; shift
+							else
+								alog "[EXIT 1] ERROR failed to set cache directory to: $2"
+								echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}target is not a directory: ${R}$2${CO}"
+								echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+								exit 1
+							fi
 			;;
-			-n|--no-confirm)	shift
+			-d|--nocache)	alog "disable package caching"
+							cache=false
+							shift
+			;;
+			-f|--force)		force="$1"
+							shift
+			;;
+			-s|--noinstall)	alog "disable install"
+							install=false
+							shift
+			;;
+			-j[0-9]*|--jobs[0-9]*)	alog "set MAKEFLAG to: $1"
+									MAKEFLAG="$1"
+									shift
+			;;
+			-o|--nocolor)	shift
+			;;
+			-n|--noconfirm)	alog "disable confirmation"
+							confirm=false
+							shift
+			;;
+			--skipinteg)	alog "disable integrity checks"
+							integ="--skipinteg"
+							shift
 			;;
 			-h|--help)		usage
 							exit
@@ -54,14 +86,14 @@ get_opts() {
 							fetch_install
 							break
 			;;
-			-Sua|--update-all)	pac_update=true
-								aur_update=true
-								fetch_update
-								break
+			-Sua|-Syua|-Syyua|--update-all)	pac_update=true
+											aur_update=true
+											fetch_update
+											break
 			;;
-			-Su|--update)	pac_update=true
-							fetch_update
-							break
+			-Su|-Syu|-Syyu|--update)	pac_update=true
+										fetch_update
+										break
 			;;
 			-R|--remove)	shift
 							remove_pkg "$@"
@@ -71,6 +103,12 @@ get_opts() {
 								rmdepends=true
 								remove_pkg "$@"
 								break
+			;;
+			-Ss|--search)	shift
+							query="$@"
+							ss=true
+							fetch_search
+							break
 			;;
 			"")		menu
 					break
@@ -85,10 +123,20 @@ get_opts() {
 
 }
 
+########################################################
+### This function is responsible for creating main menu
+########################################################
 menu() {
 
+	### Run fetch menu to display menu from /etc/fetchpkg.conf
 	fetch_menu
 	
+	### If user inputs 1 prompt for package names to install
+	### if 2 prompt for packages to remove
+	### if 3 prompt for search query
+	### if 4 attempt update mirrorlist with fetchmirrors if installed
+	### if 5 update system
+	### if 5 quit and exit
 	case "$input" in
 		1)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Enter name(s) of package(s) to install"
 			echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
@@ -109,10 +157,25 @@ menu() {
 		4)	if (which fetchmirrors &>/dev/null); then
 				sudo fetchmirrors
 			else
-				echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}updating mirrors requires fetchmirrors${CO}"
-				echo "${Y} |${M}<${Y}${B}#${G}- ${M}Install fetchmirrors and try again${CO}"
-				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-				exit 1
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}updating mirrors requires: ${R}fetchmirrors${CO}"
+				echo -en "${Y} |${M}<${Y}${B}#${G}- ${M}Would you like to install now? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+				read input
+
+				case "$input" in
+					y|Y|yy|YY|yes|"")	build_install fetchmirrors
+
+										if [ "$?" -eq "0" ]; then
+											sudo fetchmirrors
+										else
+											echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}failed to install: ${R}fetchmirrors${CO}"
+											echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+											exit 1
+										fi
+					;;
+					*)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+						exit 1
+					;;
+				esac
 			fi
 		;;
 		5)	pac_update=true
@@ -126,7 +189,11 @@ menu() {
 
 }
 
+###############################################################################################
+### This function is responsible for begining install functions for pacman sync and aur builds
+###############################################################################################
 fetch_install() {
+
 
 	fetch_repo "$fetch_query"
 	
@@ -136,101 +203,693 @@ fetch_install() {
 	
 	if [ -n "$build_repo" ]; then
 		build_install "$build_repo"
+
+		if [ "$?" -eq "1" ]; then
+			exit 1
+		fi
 	fi
 
 }
 
-fetch_search() {
+#####################################################################
+### This function is responsible for determining repo (pacman or AUR)
+#####################################################################
+fetch_repo() {
 
-	if (pacman -Ss $(echo "$query") &>/dev/null); then
-		fetch_input=$(pac_query)
-		fetch_input+=$(echo -e "\n\n$(curl -s "https://aur.archlinux.org/packages/?O=0&K=$query" | grep "<td>\|<td class=" | sed 's/<td>//;s!</td>!!;s!<td class="wrap">!!;s!<a href="/packages/!/aur/!;s!/">.*!!;s/		/ /;s/		/ /;s/<td class="flagged">//;s/%2B/+/g')")
-	else
-		fetch_input=$(curl -s "https://aur.archlinux.org/packages/?O=0&K=$query" | grep "<td>\|<td class=" | sed 's/<td>//;s!</td>!!;s!<td class="wrap">!!;s!<a href="/packages/!/aur/!;s!/">.*!!;s/		/ /;s/		/ /;s/<td class="flagged">//;s/%2B/+/g')
-	fi
+	### Begin for loop checking user input
+	for i in $(echo "$@")
+	  do
+	  	### If user entered from search menu
+		if "$search" ; then
+			### User input numbers & ensure lower than number of packages
+			if (grep -w -E '[0-9]{1,4}' <<<"$i" &>/dev/null) && [ "$i" -le "$pkg_int" ]; then
+				### If package begins with / add to AUR build else add to pacman sync
+				if (grep "^/" <<<"${pkg[$((i-1))]}" &>/dev/null); then
+					build_repo+=$(echo "$(sed 's!.*/!!' <<<"${pkg[$((i-1))]}") ")
+				else
+					sync_repo+=$(echo "$(sed 's!.*/!!' <<<"${pkg[$((i-1))]}") ")
+				fi
+			else
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$i${CO}"
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit${CO}"
+				exit 1
+			fi
+			continue
+		fi
 		
-	if [ -z "$fetch_input" ]; then
-		echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$query${CO}"
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
+		pacman -S --print-format "%v" $(echo "$i") &>/dev/null
+		
+		if [ "$?" -eq "0" ]; then
+			sync_repo+="$i "
+			continue
+		fi
+		
+		build_ver=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" |\
+            		grep "pkgver=\|pkgrel=" | sed 's/.*=//' | tr '\n' ' ' | awk '{print $1"-"$2}')
+
+		if [ -n "$build_ver" ]; then
+			pkg_ver=$(pacman -Q $i 2>/dev/null | awk '{print $2}')
+
+			if [ -n "$pkg_ver" ] && [ "$pkg_ver" != "$build_ver" ]; then
+				update_build+="$i ${M}[${R}$pkg_ver ${M}> ${G}$build_ver${M}] "				
+			elif [ -n "$pkg_ver" ]; then
+				installed_build+="$i ${M}[${G}$pkg_ver${M}] "
+			fi
+
+			build_repo+="$i "
+			continue
+		fi
+  		### Else display input error
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}invalid input: ${R}$i${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+		exit 1
+	done
+
+}
+
+########################################################################
+### This function is responsible for installing packages with pacman ###
+########################################################################
+sync_install() {
+
+	alog "begin installing: $@"
+	if "$confirm" ; then
+		if "$install" ; then
+			sudo script -q -a -c "pacman --color auto --cachedir "$cache_dir" -Sy $(echo "$@")" "$log"
+		else
+			sudo script -q -a -c "pacman --color auto --cachedir "$cache_dir" -Syw $(echo "$@")" "$log"
+		fi
+	else
+		if "$install" ; then
+			sudo script -q -a -c "pacman --color auto --noconfirm --cachedir "$cache_dir" -Sy $(echo "$@")" "$log"
+		else
+			sudo script -q -a -c "pacman --color auto --noconfirm --cachedir "$cache_dir" -Syw $(echo "$@")" "$log"
+		fi
+	fi
+
+	if [ "$?" -gt "0" ]; then
+		alog "pacman failed to install packages"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to install${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit.${CO}"
+		exit 1
+	fi
+	
+}
+
+#############################################################################
+### This function is responsible for building packages from aur.archlinux.org
+#############################################################################
+build_install() {
+
+	### Initalize local pkgname variable
+	local pkgname
+	continue=false
+
+	### Check for root user
+	if [ "$UID" -eq "0" ]; then
+		alog "[EXIT 1] ERROR: root user detected - makepkg can't be run as root"
+    	echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${Y}fetchpkg shouldn't be run as root${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+    	exit 1
+    fi
+
+	### Begin build loop for packages in @ parameter
+	for pkgname in $(echo "$@")
+	  do	
+	  	### If confirm is set to true prompt user to begin building pkgname
+	  	if "$confirm" ; then
+			check_updates
+
+			if "$continue" ; then
+				continue
+			fi
+		fi
+		
+		### If pkgname directory isn't present download and extract snapshot from aur
+		### Run editor function for PKGBUILD / .install edit prompt
+		### Check for package depends from the AUR
+		cd "$build_tmp"
+		if [ ! -d "$pkgname" ]; then
+			alog "download and extract package from: https://aur.archlinux.org/cgit/aur.git/snapshot/${pkgname}.tar.gz"
+			curl -s "https://aur.archlinux.org/cgit/aur.git/snapshot/${pkgname}.tar.gz" -o "${pkgname}.tar.gz" -L
+			tar -xf "${pkgname}.tar.gz"
+		fi
+		editor
+		check_depends
+
+		if [ "$?" -eq "1" ]; then
+			if "$rmtmp" ; then
+				cd "$build_tmp"
+				if (ls "$build_tmp/$pkgname" &>/dev/null); then
+					cd "$build_tmp"
+					rm -rf "$pkgname" "$pkgname".tar.gz
+					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Removed temporary package files: ${Y}$build_tmp/$pkgname${CO}"
+				fi
+			elif (ls "$build_tmp/$pkgname" &>/dev/null); then
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Temporary package files saved at: ${Y}$build_tmp/$pkgname${CO}"
+			fi		
+			return 1
+		fi
+
+		### Begin building / installing with makepkg
+		alog "change directory to package root: $build_tmp/$pkgname"
+		cd "$build_tmp"/"$pkgname"
+		
+		alog "begin building: $pkgname"
+		if "$confirm" ; then
+			script -q -a -c "makepkg MAKEFLAGS="$MAKEFLAG" "$force" "$integ" -s" "$log"
+		else
+			script -q -a -c "makepkg MAKEFLAGS="$MAKEFLAG" "$force" "$integ" --noconfirm -s" "$log"
+		fi
+
+		### If no errors check if cache is enabled and copy package to cache then cleanup tmp files
+		### else if errors show error and prompt to remove temporary package files
+		if ! (tail -1 "$log" | grep "ERROR" &>/dev/null); then
+			if "$install" ; then
+  				alog "begin installing package: $(ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz 2>/dev/null | tail -1)"
+  				if "$confirm" ; then
+  					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+						sudo script -q -a -c "pacman --color auto -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz ; echo "$?" > /tmp/ex" "$log"
+					else
+						sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
+					fi
+
+				else
+					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+						sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz" "$log"
+					else
+						sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
+					fi
+				fi
+
+				if (tail -1 "$log" | grep "3 incorrect password attempts" &>/dev/null); then
+					install_failed
+				else
+					continue=true
+				fi
+			else
+				continue=true
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package saved to cache: ${Y}$cache_dir/$pkgname*.pkg.tar.xz${CO}"
+			fi
+
+			if "$continue" ; then
+				if "$cache" ; then
+					alog "copy build package to cacke: $pkgname-*.pkg.tar.xz > $cache_dir"
+					sudo cp $pkgname-*.pkg.tar.xz "$cache_dir"
+				fi
+			
+				alog "remove tmp build files: $pkgname $pkgname.tar.gz"
+				cd "$build_tmp"
+				rm -rf "$pkgname" "$pkgname.tar.gz"
+				continue
+			fi
+		elif (tail -1 "$log" | grep "signatures could not be verified\|validity check\!" &>/dev/null); then
+			alog "integrity check failed for: $pkgname"
+			echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Skip integrity check for package: ${Y}$pkgname ${M}[${R}NOT RECOMMENDED!${M}] [${G}y${M}/${G}n${M}]${G}:${CO} "
+			read input
+
+			case "$input" in
+				y|Y|yy|YY|yes|"")	alog "skipping integrity check for: $pkgname"
+									if "$confirm" ; then
+										script -q -c "makepkg MAKEFLAGS="$MAKEFLAG" "$force" --skipinteg -s" "$log"
+									else
+										script -q -c "makepkg MAKEFLAGS="$MAKEFLAG" "$force" --skipinteg --noconfirm -s" "$log"
+									fi
+
+									if ! (tail -1 "$log" | grep "ERROR" &>/dev/null); then
+										if "$install" ; then
+							  				alog "begin installing package: $(ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz | tail -1)"
+  											if "$confirm" ; then
+							  					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+													sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz" "$log"
+												else
+													sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
+												fi
+											else
+												if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+													sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz" "$log"
+												else
+													sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
+												fi
+											fi
+
+											if (tail -1 "$log" | grep "3 incorrect password attempts" &>/dev/null); then
+												install_failed
+											else
+												continue=true
+											fi
+										else
+											echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package saved to cache: ${Y}$cache_dir/$pkgname*.pkg.tar.xz${CO}"	
+											continue=true
+										fi
+										
+										if "$continue" ; then
+											if "$cache" ; then
+												alog "copy build package to cacke: $pkgname-*.pkg.tar.xz > $cache_dir"
+												sudo cp $pkgname-*.pkg.tar.xz "$cache_dir"
+											fi
+
+											alog "remove tmp build files: $pkgname $pkgname.tar.gz"
+											cd "$build_tmp"
+											rm -rf "$pkgname" "$pkgname.tar.gz"
+											continue
+										fi
+									fi
+				;;
+			esac
+		fi
+		
+		### If build failed prompt user to restart build
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to build package for: ${Y}$pkgname${CO}"
+		echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Restart building package? ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+		read input
+			
+		### If user input yes fork into build_install function for pkgname
+		### else prompt user to remove temporary package files & exit
+		case "$input" in
+			y|Y|yy|YY|yes|"")	alog "retry building package: $pkgname"
+								build_install "$pkgname"
+								if [ "$?" -eq "1" ]; then
+									if "$rmtmp" ; then
+										cd "$build_tmp"
+										if (ls "$build_tmp/$pkgname" &>/dev/null); then
+											alog "remove temporary build files: $pkgname $pkgname.tar.gz"
+											cd "$build_tmp"
+											rm -rf "$pkgname" "$pkgname".tar.gz
+											echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Removed temporary package files: ${Y}$build_tmp/$pkgname${CO}"
+										fi
+									elif (ls "$build_tmp/$pkgname" &>/dev/null); then
+										alog "saved temporary build files: $build_tmp/$pkgname $build_tmp/$pkgname.tar.gz"
+										echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Temporary package files saved at: ${Y}$build_tmp/$pkgname${CO}"
+									fi		
+									return 1
+								fi
+			;;
+			*)	echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Remove temporary package files? ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+				read input
+		
+				case "$input" in
+					y|Y|yy|YY|yes|"")	alog "remove temporary build files: $pkgname $pkgname.tar.gz"
+										cd "$build_tmp"
+										rm -rf "$pkgname" "$pkgname.tar.gz"
+										echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Removed temporary package files: ${Y}$build_tmp/$pkgname${CO}"
+										rmtmp=true
+										return 1
+					;;
+					*)	alog "saved temporary build files: $build_tmp/$pkgname $build_tmp/$pkgname.tar.gz"
+						echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Temporary package files saved at: ${Y}$build_tmp/$pkgname${CO}"
+						rmtmp=false
+						return 1
+					;;
+				esac
+			;;
+		esac
+	### End pkgname for loop
+	done
+
+}
+
+check_updates() {
+
+	continue=false
+	if ! "$aur_update" ; then
+  		if (grep -w "$pkgname" <<<"$installed_build" &>/dev/null); then
+  			if (ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null) || (ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz &>/dev/null); then
+  				alog "package found in cache and up to date: $pkgname"
+  				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package in cache is up to date:${G} $(sed "s/.*$pkgname/$pkgname/" <<<"$installed_build" | awk '{print $1,$2}')"
+  				echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Reinstall package? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  				read input
+  						
+  				case "$input" in
+  					y|Y|yy|YY|yes|"")	if (ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+  											alog "begin installing cached package: $(ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz | tail -1)"
+  											sudo script -q -a -c "pacman -U $(ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz | tail -1)" "$log"
+  										elif (ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz &>/dev/null); then
+  											alog "begin installing cached package: $(ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz | tail -1)"
+  											sudo script -q -a -c "pacman -U $(ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz | tail -1)" "$log"
+  										fi
+  										continue=true
+  					;;
+  					n|N|nn|NN|no)	echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Rebuild package? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  									read input
+
+  									case "$input" in
+  										n|N|nn|NN|no)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Skipping build for: ${Y}$pkgname"
+  														continue=true
+  										;;
+  									esac
+  				esac
+  			else
+  				alog "package installed but not in cache: $pkgname"
+  				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package installed and up to date but not in cache: ${G}$(sed "s/.*$pkgname/$pkgname/" <<<"$installed_build" | awk '{print $1,$2}')"
+  				echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Rebuild and reinstall package? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  				read input
+
+  				case "$input" in
+  					n|N|nn|NN|no)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Skipping build for: ${Y}$pkgname"
+  									continue=true
+  					;;
+  				esac
+  			fi
+  		elif (grep -w "$pkgname" <<<"$update_build" &>/dev/null); then
+  			alog "update found for installed package: $pkgname"
+  			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for installed package: ${Y}$(sed "s/.*$pkgname/$pkgname/" <<<"$update_build" | awk '{print $1,$2,$3,$4,$5}')"
+  			echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Build package update? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  			read input
+
+  			case "$input" in
+  					n|N|nn|NN|no)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Skipping update build for: ${Y}$pkgname"
+  									continue=true
+  					;;
+  			esac
+  		elif (ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null) || (ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz &>/dev/null); then
+  			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package in cache but not installed:${G} $pkgname"
+  			echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Reinstall cached package? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  			read input
+  						
+  			case "$input" in
+  				y|Y|yy|YY|yes|"")	if (ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+  										alog "begin installing cached package: $(ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz | tail -1)"
+  										sudo script -q -a -c "pacman -U $(ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz | tail -1)" "$log"
+  									elif (ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz &>/dev/null); then
+  										alog "begin installing cached package: $(ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz | tail -1)"
+  										sudo script -q -a -c "pacman -U $(ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz | tail -1)" "$log"
+  									fi
+  									continue=true
+  				;;
+  				n|N|nn|NN|no)	echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Rebuild package? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  									read input
+
+  									case "$input" in
+  										n|N|nn|NN|no)	alog "skipping: $pkgname"
+  														continue=true
+  										;;
+  									esac
+  			esac
+  		else
+				while (true)
+		  		  do
+  		  		echo -en "${Y} |${M}<${Y}${B}#${G}- ${M}Begin building: ${G}$pkgname ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  				read input
+
+  				### Check user input break loop for both y & n display error for other input
+  				case "$input" in
+  					 y|Y|yy|YY|yes|n|n|nn|NN|no|"") break
+  					 ;;
+  					 *)	echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
+  					 ;;
+  				esac
+  			done
+  	
+  			### If user input n skip package to next pkgname in for loop
+				if (grep "n\|N" <<<"$input" &>/dev/null); then
+					alog "skipping: $pkgname"
+					continue=true
+				fi
+  		fi
+  	else
+			while (true)
+			  do
+  	  		echo -en "${Y} |${M}<${Y}${B}#${G}- ${M}Begin building: ${G}$pkgname ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  			read input
+
+  			### Check user input break loop for both y & n display error for other input
+  			case "$input" in
+  				 y|Y|yy|YY|yes|n|n|nn|NN|no|"") break
+  				 ;;
+  				 *)	echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
+  				 ;;
+  			esac
+  		done
+  	
+  		### If user input n skip package to next pkgname in for loop
+			if (grep "n\|N" <<<"$input" &>/dev/null); then
+				alog "skipping: $pkgname"
+				continue=true
+			fi
+  	fi
+
+
+}
+
+install_failed(){
+
+	alog "failed to install built package: $pkgname"alog
+	while (true)
+	  do
+		continue=false
+		echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Try again? ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+		read input
+
+		case "$input" in
+			y|Y|yy|YY|yes|"")	alog "reattempt install for: $pkgname"
+								if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+									sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz" "$log"
+								else
+									sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
+								fi
+							
+								if ! (tail -1 "$log" | grep "3 incorrect password attempts" &>/dev/null); then
+									continue=true
+									break
+								fi
+
+								alog "failed to install built package: $pkgname"
+			;;
+			n|N|nn|NN|no)	break
+			;;
+		esac
+	done
+
+}
+
+#####################################################
+### This function is responsible for updating system
+#####################################################
+fetch_update() {
+
+	### Begin user input loop prompting to update system
+	while (true)
+	  do
+		echo -en "${Y} |${M}<${Y}${B}#${G}-\n${Y} |${M}-${Y}${B}#${G}> ${M}Begin system update? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+		read input
+	
+		### Check user input if y begin system update
+		### else if no exit without error display error for any other input
+		case "$input" in
+			y|Y|yes|yy|YY|"")	echo -e "${Y} |${M}<${Y}${B}#${G}- $(date '+%D %X') ${M}Begin update.${CO}"
+				
+								if "$pac_update" ; then
+									sync_update
+								fi
+
+								if "$aur_update" ; then
+									build_update
+								fi
+
+								echo -e "${Y} |${M}<${Y}${B}#${G}- $(date '+%D %X') ${M}Update complete.${CO}"
+								exit
+			;;
+			n|N|no|nn|NN)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+							exit
+			;;
+			*)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
+			;;
+		esac
+	done
+
+}
+
+#################################################################
+### This function is responsible for updating repository packages
+#################################################################
+sync_update() {
+
+	### Begin system update
+	alog "begin sync repo update"
+	if "$confirm" ; then
+		sudo script -q -a -c "pacman --color auto --cachedir "$cache_dir" -Syu" "$log"
+	else
+		sudo script -q -a -c "pacman --color auto --cachedir "$cache_dir" --noconfirm -Syu" "$log"
+	fi
+	
+	### If pacman exits with error display failed to install message and exit
+	if [ "$?" -gt "0" ]; then
+		alog "[EXIT 1] ERROR: failed to update from sync repos"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to update system${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
 		exit 1
 	fi
 
-	fetch_list "$fetch_input"
-	fetch_install
-
-
 }
 
-fetch_list() {
+###################################################################
+### This function is responsible for updating packages from the AUR
+###################################################################
+build_update() {
 
-	while read -r line
-	  do
-		case "$seq" in
-			"0")	pkg+=( "$line" )
-					seq=1
-			;;
-			"1")	ver+=( "$line" )
-					seq=2
-			;;
-			"2")	vote+=( "$line" )
-					seq=3
-			;;
-			"3")	seq=4
-			;;
-			"4")	des+=( "$line" )
-					seq=5
-			;;
-			"5")	pkg_int=$((pkg_int+1))
-					seq=0 
-			;;
-		esac
-	done <<<"$@"
-	
-	export pkg ver vote des pkg_int
-	echo -e "${Y} |${M}<${Y}${B}#${G}---------- ${UB}$pkg_int${M} Package(s) Found${G} ----------${Y}${B}#${M}>${Y}|${CO}"
-	
-	until [ "$seq" -eq "$pkg_int" ]
-	  do
-	  	pkg_frmt=$(sed 's!/aur/!aur/!;''s!.*/!'$"${Y}${UB}&${G}!g" <<<${pkg[$seq]})
-	  	pkg_ver=( $(pacman -Q $(echo "${pkg[$seq]}" | sed 's!.*/!!') 2>/dev/null) )
-	  	
-	  	if [ -n "${vote[$seq]}" ]; then
-		  	pkg_update="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}] ${M}[${Y}${U}UPDATE${Y}:${R} ${pkg_ver[1]}${M}]"
-		  	pkg_installed="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}] ${M}[${Y}${U}INSTALLED${Y}:${G} ${pkg_ver[1]}${M}]"
-		  	pkg_new="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}]"
-	  	else
-	  		pkg_update="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [${Y}${U}UPDATE${Y}:${R} ${pkg_ver[1]}${M}]"
-		  	pkg_installed="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}] [${Y}${U}INSTALLED${Y}:${G} ${pkg_ver[1]}${M}]"
-		  	pkg_new="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}]"
+	alog "begin AUR update"
+	echo -e "${Y} |${M}<${Y}${B}#${G}- Begin AUR update...${CO}"
 
-	  	fi
-	  	
-	  	if [ -n "$pkg_ver" ]; then
-	  		if [ "${ver[$seq]}" != "${pkg_ver[1]}" ]; then
-				echo -e "$pkg_update${CO}"
-			else
-				echo -e "$pkg_installed${CO}"
+	### Begin for loop of AUR packages
+	for i in $(pacman -Qm | awk '{print $1}')
+	  do
+	  	### Define realease version and local version variables using curl to display current release
+	  	rel_ver=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" |\
+	  				grep "pkgver=\|pkgrel=" | sed 's/.*=//' | tr '\n' ' ' | awk '{print $1"-"$2}')
+	  	local_ver=$(pacman -Q $(echo "$i") | awk '{print $2}')
+
+	  	### If release version is not equal to local version fork into build install to begin build
+	  	if [ "$rel_ver" != "$local_ver" ]; then
+	  		if [ -n "$rel_ver" ]; then
+	  			alog "found update for: $i"
+				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for: ${G}$i${CO} ${M}[${R}$local_ver ${M}> ${G}$rel_ver${M}]"
+				build_install "$i"
 			fi
-	  	else
-		  	echo -e "$pkg_new${CO}"
-		fi
-
-	  	echo -e "${Y} |${CO}     ${des[$seq]}${CO}"
-		seq=$((seq+1))
+			
+			if [ "$?" -eq "1" ]; then
+				exit 1
+			fi
+	  	fi
 	done
 
-	echo -e "${Y} |${M}<${Y}${B}#${G}----------------------------------------${Y}${B}#${M}>${Y}|${CO}"
-	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}${U}Enter package number(s)${M} [${G}${UB}1${G} ${UB}2${G} ${UB}3${M}...]${CO}"
-	echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
-	read fetch_query
+}
+
+########################################################################
+### This function is responsible for removing packages from your system
+########################################################################
+remove_pkg() {
+
+	### Check if package(s) are installed first
+	pkg_err=$(pacman -Q $(echo "$@") 2>&1)
+	
+	### If error display package not found message and exit
+	if [ "$?" -gt "0" ]; then
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}package not found: ${Y}$(grep "error" <<<"$pkg_err" | awk '{print $3}' | tr '\n' ' ')${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+		exit 1
+	fi
+
+	### Begin removing package with pacman
+	if "$confirm" ; then
+		if "$rmdepends" ; then
+			alog "remove package and depends: $@"
+			sudo script -q -a -c "pacman --color auto -Rsn $(echo "$@")" "$log"
+		else
+			alog "remove package: $@"
+			sudo script -q -a -c "pacman --color auto -R $(echo "$@")" "$log"
+		fi
+	else
+		if "$rmdepends" ; then
+			alog "remove package and depends: $@"
+			sudo script -q -a -c "pacman --color auto --noconfirm -Rsn $(echo "$@")" "$log"
+		else
+			alog "remove package: $@"
+			sudo script -q -a -c "pacman --color auto --noconfirm -R $(echo "$@")" "$log"
+		fi
+
+	fi
 
 }
 
-pac_query() {
+###########################################################################
+### This function is responsible for checking dependencies for AUR packages
+###########################################################################
+check_depends() {
+
+	### Source PKGBUILD to define depends & makedepends
+	unset depends makedepends
+	source "$pkgname"/PKGBUILD 2>/dev/null
+		
+	### Check if package has any dependencies
+	if [ -n "$depends" ] || [ -n "$makedepends" ]; then
+		### Check if dependencies are found in pacman repos, show errors when not found
+		depends_list=$(pacman -Sp $(echo "${makedepends[@]} ${depends[@]}") 2>&1)
+
+		### If error occured then dependency exists on AUR
+		if [ "$?" -gt "0" ]; then
+			### Check if dependency is a shared library
+			### If dependency is shared object skip, else fork into build_install to build AUR dependency
+			if ! (awk '{print $5}' <<<"$depends_list" | tr '\n' ' ' | grep '^.*\.so'); then
+				alog "found AUR depends for $pkgname: $(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')"
+				if [ $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//;s/<.*//' | tr '\n' ' ' | wc -w) -gt "1" ]; then
+						echo "${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependencies found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
+				else
+					echo "${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependency found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
+				fi
+				
+				for i in $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//;s/<.*//' | tr '\n' ' ')
+				  do
+					build_ver=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" |\
+            			grep "pkgver=\|pkgrel=" | sed 's/.*=//' | tr '\n' ' ' | awk '{print $1"-"$2}')
+					pkg_ver=$(pacman -Q $i 2>/dev/null | awk '{print $2}')
+
+					if [ -n "$pkg_ver" ] && [ "$pkg_ver" != "$build_ver" ]; then
+						update_build+="$i ${M}[${R}$pkg_ver ${M}> ${G}$build_ver${M}] "				
+					elif [ -n "$pkg_ver" ]; then
+						installed_build+="$i ${M}[${G}$pkg_ver${M}] "
+					fi
+				done
+
+				build_install $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//;s/<.*//' | tr '\n' ' ')
+
+				if [ "$?" -eq "1" ]; then
+					return 1
+				fi
+			fi
+		fi
+	fi
+
+}
+
+
+###############################################################################
+### This function is responsible for checking user qurey to create search list
+###############################################################################
+fetch_search() {
+
+	### If qurey is found in sync repos
+	if (pacman -Ss $(echo "$query") &>/dev/null); then
+		### Set fetch input to formatted sync repo list
+		fetch_input=$(pac_search)
+		### Add in any AUR packages found
+		fetch_input+=$(echo -e "\n\n$(curl -s "https://aur.archlinux.org/packages/?O=0&K=$query" | grep "<td>\|<td class=" |\
+		sed 's/.*<td>/ /;s/.*<.*">/ /;s!</.*!!;s/%2B/+/g')")
+	### Else query not found in sync repos
+	else
+		### Set fetch query to search page output from aur.archlinux.org
+		fetch_input=$(curl -s "https://aur.archlinux.org/packages/?O=0&K=$query" |\
+						grep "<td>\|<td class=" |\
+						sed 's/.*<td>/ /;s/.*<.*">/ /;s!</.*!!;s/%2B/+/g')
+	fi
+
+	### If fetch_info is not set display error and exit
+	if [ -z "$fetch_input" ]; then
+		alog "[EXIT 1] ERROR package not found: $query"
+		echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}package not found: ${R}$query${CO}"
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+		exit 1
+	fi
+
+	### Begin fetch_list function to format output of fetch_input
+	### Begin fetch install to begin installing packages
+	fetch_list "$fetch_input"
+	
+	if ! "$ss" ; then
+		fetch_install
+	fi
+
+}
+
+####################################################################
+### This function is responsible for creating formatted pacman menu
+###################################################################
+pac_search() {
 
 	seq=0
 	while read -r line
 		do
+			### Case seq 0 echo
 			case "$seq" in
 				0) 	echo -e "$line" | awk '{print $1"\n"$2}'
 					seq=1
@@ -245,226 +904,206 @@ pac_query() {
 
 }
 
-fetch_repo() {
+#########################################################################################
+### This function is responsible for parsing fetch_input variable to display search menu
+########################################################################################
+fetch_list() {
 
-	for i in $(echo "$@")
+	### Read lines from fetch_input
+	### fetch_input is formatted into sequences of 6 lines
+	###	1. Package 2. Version 3. Votes 4. Popularity 5. Discription 6. Blank line new pkg comes next
+	while read -r line
 	  do
-		if "$search" ; then
-			if (grep -w -E '[0-9]{1,4}' <<<"$i" &>/dev/null) && [ "$i" -le "$pkg_int" ]; then
-				if (grep "^/" <<<"${pkg[$((i-1))]}" &>/dev/null); then
-					build_repo+=$(echo "$(sed 's!.*/!!' <<<"${pkg[$((i-1))]}") ")
-				else
-					sync_repo+=$(echo "$(sed 's!.*/!!' <<<"${pkg[$((i-1))]}") ")
-				fi
+	  	### Loop seq variables based on line number in sequence
+	  	### Where line 0 seq 0 is package name (with repo)
+	  	### 1 seq 1 is package version
+	  	### 2 seq 2 is package votes
+	  	### 3 seq 3 is package populatiry
+	  	### 4 seq 4 is package description
+	  	### 5 seq 5 increase package count int
+	  	### Set seq back to zero for new package on start of next line
+
+		case "$seq" in
+			"0")	pkg+=( "$line" )
+					seq=1
+			;;
+			"1")	ver+=( "$line" )
+					seq=2
+			;;
+			"2")	vote+=( "$line" )
+					seq=3
+			;;
+			"3")	pop+=( "$line" )
+					seq=4
+			;;
+			"4")	des+=( "$line" )
+					seq=5
+			;;
+			"5")	pkg_int=$((pkg_int+1))
+					seq=0 
+			;;
+		esac
+	done <<<"$@"
+	
+	### Export all package info variables for use in later functions
+	### Display number of packages found
+	export pkg ver vote des pkg_int
+	alog "$pkg_int packages found for search query"
+	echo -e "${Y} |${M}<${Y}${B}#${G}---------- ${UB}$pkg_int${M} Package(s) Found${G} ----------${Y}${B}#${M}>${Y}|${CO}"
+	
+	### seq is set to 0 from last seq loop
+	### until seq is eaqual to number of packages found loop
+	until [ "$seq" -eq "$pkg_int" ]
+	  do
+	  	### Format pkg variable to add color with sed
+	  	### Check version using pacman -Q to find out if package is already installed
+		pkg_frmt=$(sed 's!.*/!'$"${Y}${UB}&${G}!g" <<<${pkg[$seq]})
+	  	pkg_ver=( $(pacman -Q $(echo "${pkg[$seq]}" | sed 's!.*/!!') 2>/dev/null) )
+	  	
+	  	### Check if vote is set to determine if votes and pop should be added
+	  	### Set pkg* variables in format seq.) pkg ver vote pop installed/update
+	  	if [ -n "${vote[$seq]}" ]; then
+	  		### pkg_update is used if package is installed and needs update
+	  		### pkg_installed is used if package is installed and up to date
+	  		## pkg_new is used if package is not found on system
+		  	pkg_update="${Y} |${G}${UB}$((seq+1))${CO}.${Y}) ${UB}aur/${G}${pkg[$seq]} ${M}[${Y}${U}INSTALLED${Y}: ${pkg_ver[1]}${M}] [${Y}${U}UPDATE${Y}:${R} ${pkg_ver[1]} ${M}> ${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}] [Pop: ${G}${pop[$seq]}${M}]"
+		  	pkg_installed="${Y} |${G}${UB}$((seq+1))${CO}.${Y}) ${UB}aur/${G}${pkg[$seq]} ${M}[${Y}${U}INSTALLED${Y}:${G} ${pkg_ver[1]}${M}] [Votes: ${G}${vote[$seq]}${M}] [Pop: ${G}${pop[$seq]}${M}]"
+		  	pkg_new="${Y} |${G}${UB}$((seq+1))${CO}.${Y}) ${UB}aur/${G}${pkg[$seq]} ${M}[${G}${ver[$seq]}${M}] [Votes: ${G}${vote[$seq]}${M}] [Pop: ${G}${pop[$seq]}${M}]"
+	  		pkg[$seq]="/aur/${pkg[$seq]}"
+	  	else
+	  		pkg_update="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${Y}${U}INSTALLED${Y}: ${pkg_ver[1]}${M}] [${Y}${U}UPDATE${Y}:${R} ${pkg_ver[1]} ${M}> ${G}${ver[$seq]}${M}]"
+		  	pkg_installed="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${Y}${U}INSTALLED${Y}:${G} ${pkg_ver[1]}${M}]"
+		  	pkg_new="${Y} |${G}${UB}$((seq+1))${CO}.${Y})${CO} $pkg_frmt ${M}[${G}${ver[$seq]}${M}]"
+	  	fi
+	  	
+	  	### If pkg_ver is set then package is installed on system, display pkg_updates or pkg_installed
+	  	### else pkg_ver is not set display package with no installed version info
+	  	if [ -n "$pkg_ver" ]; then
+	  		if [ "${ver[$seq]}" != "${pkg_ver[1]}" ]; then
+				update_build+="${Y}${pkg[$seq]} ${M}[${R}${pkg_ver[1]} ${M}> ${G}${ver[$seq]}${M}] "
+				echo -e "$pkg_update${CO}"
 			else
-				echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$i${CO}"
-				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-				exit 1
+				installed_build+="${Y}${pkg[$seq]} ${M}[${G}${ver[$seq]}${M}] "
+				echo -e "$pkg_installed${CO}"
 			fi
-		elif (pacman -Sp $(echo "$i") &>/dev/null); then
-			sync_repo+="$i "
-		elif ! (curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" | grep "DOCTYPE" &>/dev/null); then
-			build_repo+="$i "
-  		else
-			echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$i${CO}"
-			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-			exit 1
+	  	else
+		  	echo -e "$pkg_new${CO}"
+		fi
+
+		### Display package description
+	  	echo -e "${Y} |${CO}        ${des[$seq]}${CO}"
+		seq=$((seq+1))
+	done
+
+	### End of package menu loop prompt user to input package numbers
+	echo -e "${Y} |${M}<${Y}${B}#${G}----------------------------------------${Y}${B}#${M}>${Y}|${CO}"
+	
+	if ! "$ss" ; then
+		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}${U}Enter package number(s)${M} [${G}${UB}1${G} ${UB}2${G} ${UB}3${M}...]${CO}"
+		echo -en "${Y} |${M}-${Y}${B}#${G}> ${CO}"
+		read fetch_query
+	fi
+
+}
+
+###########################################################################
+### This function is responsible for prompting to edit PKGBUILD / .install
+###########################################################################
+editor() {
+		
+		### Check if confirm is set to true
+		### If true being loop to edit PKGBUILD / install files
+		if "$confirm" ; then
+			while (true)
+			  do
+			  	### Prompt user to edit PKGBUILD
+				echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Edit the PKGBUILD for: ${G}$pkgname ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+				read input
+
+				### Check user input if y edit PKGBUILD then break loop
+				### if n break loop, show error for any other input
+				case "$input" in
+					y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")	edit="PKGBUILD"
+													edit_file
+													break
+					;;
+					n|N|nn|NN|nN|Nn|no|No|NO)	break
+					;;
+					*)	echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${Y}invalid input: ${R}$input${CO}"
+					;;
+				esac
+			done
+		
+			### Check if install file exists
+			install_script=$(ls "$pkgname"/*.install &>/dev/null)
+
+			### If install file exists prompt user to edit
+			if [ "$?" -eq "0" ]; then
+				while (true)
+				  do
+					echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Edit the install script: ${G}$install_script ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
+					read input
+					
+					### Check user input if y edit install file then break loop
+					### if n break loop, show error for any other input
+					case "$input" in
+						y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")	edit="$install_script"
+														edit_file
+														break
+						;;
+						n|N|nn|NN|nN|Nn|no|No|NO)	break
+						;;
+						*)	echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}invalid input: ${R}$input${CO}"
+						;;
+					esac
+				done
+			fi
+		fi
+
+}
+
+#################################################################
+### This function is responsible for editing PKGBUILD / .install
+#################################################################
+edit_file() {
+
+	### Begin editor while loop
+	while (true)
+	  do
+	  	### If EDITOR is not defined  prompt user to select editor
+		if [ -z "$EDITOR" ]; then
+			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Select a text editor.${CO}"
+			echo -en "${Y} |${M}-${Y}${B}#${G}> Edit with: ${CO}"
+			read EDITOR
+		fi
+		
+		### Edit file with EDITOR
+		$EDITOR "$pkgname"/"$edit" 2>/dev/null
+
+		### If command fails display error and loop
+		if [ "$?" -gt "0" ]; then
+			echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${M}editor not found: ${Y}$EDITOR${CO}"
+			unset EDITOR
+		else
+			alog "edited file: $pkgname/$edit"
+			break
 		fi
 	done
 
 }
 
-sync_install() {
+alog() {
 
-	if "$confirm" ; then
-		sudo pacman --color auto -Sy $(echo "$@")
-	else
-		sudo pacman --color auto --noconfirm -Sy $(echo "$@")
-	fi
-
-	if [ "$?" -gt "0" ]; then
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to install${CO}"
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-		exit 1
-	fi
-	
-}
-
-build_install() {
-
-	unset depends makedepends
-	local i
-
+	### Check if build directory exists, if not create it
 	if [ ! -d "$build_tmp" ]; then
 		mkdir "$build_tmp"
 	fi
 
-	for i in $(echo "$@")
-	  do
-		cd "$build_tmp"
-		curl -s "https://aur.archlinux.org/cgit/aur.git/snapshot/${i}.tar.gz" -o "${i}.tar.gz" -L
-		tar -xf "${i}.tar.gz"
-
-		if "$confirm" ; then
-			while (true)
-			  do
-				echo -en "${Y} |\n |${M}-${Y}${B}#${G}> ${M}Would you like to edit the PKGBUILD for ${G}$i ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
-				read input
-
-				case "$input" in
-					y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")
-						while (true)
-						  do
-							if [ -z "$EDITOR" ]; then
-								echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Select a text editor.${CO}"
-								echo -en "${Y} |${M}-${Y}${B}#${G}> Edit with: ${CO}"
-								read EDITOR
-							fi
-							
-							$EDITOR "$i"/PKGBUILD 2>/dev/null
-    
-							if [ "$?" -gt "0" ]; then
-								echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}editor not found: ${Y}$EDITOR${CO}"
-								unset EDITOR
-							else
-								break
-							fi
-						done
-						break
-					;;
-					n|N|nn|NN|nN|Nn|no|No|NO)
-						break
-					;;
-					*)
-						echo "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
-					;;
-				esac
-			done
-		fi
-
-		source "$i"/PKGBUILD 2>/dev/null
-		
-		if [ -n "$depends" ] || [ -n "$makedepends" ]; then
-			depends_list=$(pacman -Sp $(echo "${makedepends[@]} ${depends[@]}") 2>&1)
-
-			if [ "$?" -gt "0" ]; then
-				echo "${Y} |${M}<${Y}${B}#${G}- ${M}Dependency found: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
-				build_install $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//' | tr '\n' ' ')
-			fi
-		fi
-
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Begin installing: ${G}$i${CO}"
-		cd "$build_tmp"/"$i"
-		makepkg -si
-
-		if [ "$?" -eq "0" ]; then
-			cd "$build_tmp"
-			rm -rf "$i" "$i.tar.gz"
-		else
-			echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to install package: ${Y}$i${CO}"
-			echo -en "${Y} |\n |${M}-${Y}${B}#${G}> ${M}Remove temporary package files? ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
-			read input
-		
-			case "$input" in
-				y|Y|yy|YY|yY|Yy|yes|Yes|YES|"")
-					cd "$build_tmp"
-					rm -rf "$i" "$i.tar.gz"
-					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Removed temporary package files: ${Y}/$build_tmp/$i${CO}"
-					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-				;;
-				*)
-					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Temporary package files saved at: ${Y}/$build_tmp/$i${CO}"
-					echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-				;;
-			esac
-		fi
-	done
-
-}
-
-fetch_update() {
-
-	while (true)
-	  do
-		echo -en "${Y} |${M}<${Y}${B}#${G}-\n${Y} |${M}-${Y}${B}#${G}> ${M}Begin system update? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
-		read input
-	
-		case "$input" in
-			y|Y|yes|Yes|yY|Yy|yy|YY|"")
-				date --rfc-3339='date'
-				echo -e "${Y} |${M}<${Y}${B}#${G}- Begin update.${CO}"
-				
-				if "$pac_update" ; then
-					sync_update
-				fi
-
-				if "$aur_update" ; then
-					build_update
-				fi
-
-				echo -e "${Y} |${M}<${Y}${B}#${G}- Update complete.${CO}"
-				exit
-			;;
-			n|N|no|No|nN|Nn|nn|NN)
-				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-				exit
-			;;
-			*)
-				echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$input${CO}"
-			;;
-		esac
-	done
-
-}
-
-sync_update() {
-
-	if "$confirm" ; then
-		sudo pacman -Syu
-	else
-		sudo pacman --noconfirm -Syu
-	fi
-		
-	if [ "$?" -gt "0" ]; then
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to update system${CO}"
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-		exit 1
+	if [ ! -f "$log" ]; then
+		touch "$log"
 	fi
 
-}
-
-build_update() {
-
-	echo -e "${Y} |${M}<${Y}${B}#${G}- Begin AUR update...${CO}"
-
-	for i in $(pacman -Qm | awk '{print $1}')
-	  do
-	  	rel_ver=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=$i" | grep "pkgver=\|pkgrel=" | sed 's/.*=//' | tr '\n' ' ' | awk '{print $1"-"$2}')
-	  	local_ver=$(pacman -Q $(echo "$i") | awk '{print $2}')
-
-	  	if [ "$rel_ver" != "$local_ver" ]; then
-			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for: ${G}$i${CO}"
-			build_install "$i"
-	  	fi
-	done
-
-}
-
-remove_pkg() {
-
-	pkg_err=$(pacman -Q $(echo "$@") 2>&1)
-		
-	if [ "$?" -gt "0" ]; then
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}invalid input: ${Y}$(grep "error" <<<"$pkg_err" | awk '{print $3}' | tr '\n' ' ')${CO}"
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Exit...${CO}"
-		exit 1
-	fi
-
-	if "$rmdepends" ; then
-		sudo pacman -Rsn "$@"
-	else
-		sudo pacman -R "$@"
-	fi
+	echo "<=== [$(date '+%D %X')]: $@" >>"$log"
 
 }
 
@@ -474,9 +1113,15 @@ else
 	config="fetchpkg.conf"
 fi
 
+seq=0
+pkg_int=0
 pac_update=false
 aur_update=false
 search=false
+ss=false
 source "$config"
 config
+alog "fetchpkg started"
+alog "initiate runtime variables seq=0 pkg_int=0 pac_update=false aur_update=false search=false"
+alog "source config file: $config"
 get_opts "$@"
