@@ -1107,11 +1107,11 @@ alog() {
 
 }
 
-if [ $(basename "$0") = "fetchpkg" ]; then
-	config=/etc/fetchpkg.conf
-else
+#if [ $(basename "$0") = "fetchpkg" ]; then
+#	config=/etc/fetchpkg.conf
+#else
 	config="fetchpkg.conf"
-fi
+#fi
 
 seq=0
 pkg_int=0
