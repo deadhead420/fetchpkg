@@ -110,8 +110,14 @@ get_opts() {
 							fetch_search
 							break
 			;;
-			"")		menu
-					break
+			"")		while (true)
+					  do
+						menu
+						
+						if [ "$?" -gt "0" ]; then
+							break
+						fi
+					done
 			;;
 			*)		query="$@"
 					search=true
@@ -169,11 +175,9 @@ menu() {
 										else
 											echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}failed to install: ${R}fetchmirrors${CO}"
 											echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
-											exit 1
 										fi
 					;;
 					*)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
-						exit 1
 					;;
 				esac
 			fi
