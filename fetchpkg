@@ -368,20 +368,24 @@ build_install() {
 
 		### If no errors check if cache is enabled and copy package to cache then cleanup tmp files
 		### else if errors show error and prompt to remove temporary package files
-		if ! (tail -1 "$log" | grep "ERROR" &>/dev/null); then
+		if ! (tail -n5 "$log" | grep "ERROR" &>/dev/null); then
 			if "$install" ; then
   				alog "begin installing package: $(ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz 2>/dev/null | tail -1)"
   				if "$confirm" ; then
   					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
 						sudo script -q -a -c "pacman --color auto -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz ; echo "$?" > /tmp/ex" "$log"
 					else
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
 						sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
 					fi
 
 				else
 					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
 						sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz" "$log"
 					else
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
 						sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
 					fi
 				fi
@@ -464,7 +468,7 @@ build_install() {
 		fi
 		
 		### If build failed prompt user to restart build
-		echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to build package for: ${Y}$pkgname${CO}"
+		echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}failed to build package for: ${Y}$pkgname${CO}"
 		echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Restart building package? ${M}[${G}y${M}/${G}n${M}]${G}:${CO} "
 		read input
 			
@@ -817,9 +821,9 @@ check_depends() {
 			if ! (awk '{print $5}' <<<"$depends_list" | tr '\n' ' ' | grep '^.*\.so'); then
 				alog "found AUR depends for $pkgname: $(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')"
 				if [ $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//;s/<.*//' | tr '\n' ' ' | wc -w) -gt "1" ]; then
-						echo "${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependencies found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
+					echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependencies found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
 				else
-					echo "${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependency found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
+					echo -e  "\n${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependency found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
 				fi
 				
 				for i in $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//;s/<.*//' | tr '\n' ' ')
