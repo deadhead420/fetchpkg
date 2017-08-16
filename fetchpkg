@@ -373,19 +373,19 @@ build_install() {
   				alog "begin installing package: $(ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz 2>/dev/null | tail -1)"
   				if "$confirm" ; then
   					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
-						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname${CO}"
 						sudo script -q -a -c "pacman --color auto -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz ; echo "$?" > /tmp/ex" "$log"
 					else
-						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname${CO}"
 						sudo script -q -a -c "pacman -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
 					fi
 
 				else
 					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
-						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname${CO}"
 						sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz" "$log"
 					else
-						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname"
+						echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}Install Package: ${Y}$pkgname${CO}"
 						sudo script -q -a -c "pacman --noconfirm -U "$build_tmp"/"$pkgname"/"$pkgname"-r[0-9]*.pkg.tar.xz" "$log"
 					fi
 				fi
@@ -521,7 +521,18 @@ check_updates() {
 
 	continue=false
 	if ! "$aur_update" ; then
-  		if (grep -w "$pkgname" <<<"$installed_build" &>/dev/null); then
+  		if (grep -w "$pkgname" <<<"$update_build" &>/dev/null); then
+  			alog "update found for installed package: $pkgname"
+  			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for installed package: ${Y}$(sed "s/.*$pkgname/$pkgname/" <<<"$update_build" | awk '{print $1,$2,$3,$4,$5}')"
+  			echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Build package update? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
+  			read input
+
+  			case "$input" in
+  					n|N|nn|NN|no)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Skipping update build for: ${Y}$pkgname"
+  									continue=true
+  					;;
+  			esac
+  		elif (grep -w "$pkgname" <<<"$installed_build" &>/dev/null); then
   			if (ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null) || (ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz &>/dev/null); then
   				alog "package found in cache and up to date: $pkgname"
   				echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package in cache is up to date:${G} $(sed "s/.*$pkgname/$pkgname/" <<<"$installed_build" | awk '{print $1,$2}')"
@@ -559,17 +570,6 @@ check_updates() {
   					;;
   				esac
   			fi
-  		elif (grep -w "$pkgname" <<<"$update_build" &>/dev/null); then
-  			alog "update found for installed package: $pkgname"
-  			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Update found for installed package: ${Y}$(sed "s/.*$pkgname/$pkgname/" <<<"$update_build" | awk '{print $1,$2,$3,$4,$5}')"
-  			echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Build package update? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
-  			read input
-
-  			case "$input" in
-  					n|N|nn|NN|no)	echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Skipping update build for: ${Y}$pkgname"
-  									continue=true
-  					;;
-  			esac
   		elif (ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null) || (ls "$cache_dir"/"$pkgname"-r[0-9]*.pkg.tar.xz &>/dev/null); then
   			echo -e "${Y} |${M}<${Y}${B}#${G}- ${M}Package in cache but not installed:${G} $pkgname"
   			echo -en "${Y} |${M}-${Y}${B}#${G}> ${M}Reinstall cached package? ${M}[${G}y${M}/${G}n${M}]${G}: ${CO}"
