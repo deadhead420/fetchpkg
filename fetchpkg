@@ -334,9 +334,18 @@ build_install() {
 		### Check for package depends from the AUR
 		cd "$build_tmp"
 		if [ ! -d "$pkgname" ]; then
-			alog "download and extract package from: https://aur.archlinux.org/cgit/aur.git/snapshot/${pkgname}.tar.gz"
-			curl -s "https://aur.archlinux.org/cgit/aur.git/snapshot/${pkgname}.tar.gz" -o "${pkgname}.tar.gz" -L
-			tar -xf "${pkgname}.tar.gz"
+			while (true)
+			  do
+				alog "download and extract package from: https://aur.archlinux.org/cgit/aur.git/snapshot/${pkgname}.tar.gz"
+				curl -s "https://aur.archlinux.org/cgit/aur.git/snapshot/${pkgname}.tar.gz" -o "${pkgname}.tar.gz" -L
+				tar -xf "${pkgname}.tar.gz" &>/dev/null
+
+				if [ "$?" -gt "0" ]; then
+					pkgname="${pkgname}-git"
+				else
+					break
+				fi
+			done
 		fi
 		editor
 		check_depends
