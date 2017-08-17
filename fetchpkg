@@ -342,10 +342,10 @@ build_install() {
 
 				if [ "$?" -gt "0" ]; then
 					pkg_org="$pkgname"
-					pkgname=$(curl -s "https://aur.archlinux.org/packages/${pkgname}/" | grep "class=\"wrap\"><a href=\"/pkgbase" | sed 's/.*\">//;s/<.*//')
+					pkgname=$(curl -s "https://aur.archlinux.org/packages/${pkg_org}/" | grep "class=\"wrap\"><a href=\"/pkgbase" | sed 's/.*\">//;s/<.*//')
 					
 					if [ $(wc -c <<<"$pkgname") -eq "1" ]; then
-						pkgname=$(curl -s "https://aur.archlinux.org/packages/${pkgname}-git/" | grep "class=\"wrap\"><a href=\"/pkgbase" | sed 's/.*\">//;s/<.*//')
+						pkgname=$(curl -s "https://aur.archlinux.org/packages/${pkg_org}-git/" | grep "class=\"wrap\"><a href=\"/pkgbase" | sed 's/.*\">//;s/<.*//')
 						
 						if [ $(wc -c <<<"$pkgname") -eq "1" ]; then
 							echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}unable to find package: $pkg_org${CO}"
