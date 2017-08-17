@@ -341,7 +341,18 @@ build_install() {
 				tar -xf "${pkgname}.tar.gz" &>/dev/null
 
 				if [ "$?" -gt "0" ]; then
-					pkgname="${pkgname}-git"
+					pkg_org="$pkgname"
+					pkgname=$(curl -s "https://aur.archlinux.org/packages/${pkgname}/" | grep "class=\"wrap\"><a href=\"/pkgbase" | sed 's/.*\">//;s/<.*//')
+					
+					if [ $(wc -c <<<"$pkgname") -eq "1" ]; then
+						pkgname=$(curl -s "https://aur.archlinux.org/packages/${pkgname}-git/" | grep "class=\"wrap\"><a href=\"/pkgbase" | sed 's/.*\">//;s/<.*//')
+						
+						if [ $(wc -c <<<"$pkgname") -eq "1" ]; then
+							echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error ${M}unable to find package: $pkg_org${CO}"
+							echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+							exit 1
+						fi
+					fi
 				else
 					break
 				fi
