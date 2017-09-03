@@ -72,7 +72,7 @@ get_opts() {
 							shift
 			;;
 			-s|--noinstall)	alog "disable install"
-							install=false
+							install_pkg=false
 							shift
 			;;
 			-j[0-9]*|--jobs[0-9]*)	alog "set MAKEFLAG to: $1"
@@ -289,13 +289,13 @@ sync_install() {
 
 	alog "begin installing: $@"
 	if "$confirm" ; then
-		if "$install" ; then
+		if "$install_pkg" ; then
 			sudo script -q -a -c "pacman --color auto --cachedir "$cache_dir" -Sy $(echo "$@")" "$log"
 		else
 			sudo script -q -a -c "pacman --color auto --cachedir "$cache_dir" -Syw $(echo "$@")" "$log"
 		fi
 	else
-		if "$install" ; then
+		if "$install_pkg" ; then
 			sudo script -q -a -c "pacman --color auto --noconfirm --cachedir "$cache_dir" -Sy $(echo "$@")" "$log"
 		else
 			sudo script -q -a -c "pacman --color auto --noconfirm --cachedir "$cache_dir" -Syw $(echo "$@")" "$log"
@@ -400,7 +400,7 @@ build_install() {
 		### If no errors check if cache is enabled and copy package to cache then cleanup tmp files
 		### else if errors show error and prompt to remove temporary package files
 		if ! (tail -n5 "$log" | grep "ERROR" &>/dev/null); then
-			if "$install" ; then
+			if "$install_pkg" ; then
   				alog "begin installing package: $(ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz 2>/dev/null | tail -1)"
   				if "$confirm" ; then
   					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
@@ -456,7 +456,7 @@ build_install() {
 									fi
 
 									if ! (tail -1 "$log" | grep "ERROR" &>/dev/null); then
-										if "$install" ; then
+										if "$install_pkg" ; then
 							  				alog "begin installing package: $(ls "$cache_dir"/"$pkgname"-[0-9]*.pkg.tar.xz | tail -1)"
   											if "$confirm" ; then
 							  					if (ls "$build_tmp"/"$pkgname"/"$pkgname"-[0-9]*.pkg.tar.xz &>/dev/null); then
