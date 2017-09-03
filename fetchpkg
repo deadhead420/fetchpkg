@@ -42,7 +42,18 @@ get_opts() {
 	while (true)
 	  do
 		case "$1" in
-			-c|--cachedir)	if [ -d "$2" ]; then
+            -b|--builddir)  if [ -d "$2" ]; then
+                                alog "set build directory to: $2"
+                                build_tmp="$2"
+                                shift ; shift
+                            else
+                                alog "[EXIT 1] ERROR failed to set build directory to: $2"
+								echo -e "${Y} |${M}<${Y}${B}#${G}- ${R}Error: ${Y}target is not a directory: ${R}$2${CO}"
+								echo -e "${Y} |${M}<${Y}${B}#${G}- ${Y}Exit.${CO}"
+								exit 1
+							fi
+            ;;
+            -c|--cachedir)	if [ -d "$2" ]; then
 								alog "set cache directory to: $2"
 								cache_dir="$2"
 								shift ; shift
