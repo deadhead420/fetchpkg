@@ -842,14 +842,16 @@ check_depends() {
 		
 	### Check if package has any dependencies
 	if [ -n "$depends" ] || [ -n "$makedepends" ]; then
-		### Check if dependencies are found in pacman repos, show errors when not found
-		depends_list=$(pacman -Sp $(echo "${makedepends[@]} ${depends[@]}") 2>&1)
+		
+        make_deps=
+        ### Check if dependencies are found in pacman repos, show errors when not found
+		depends_list=$(pacman -Sp $(echo "${makedepends[@]} ${depends[@]}" | sed 's/ /\n/g' | grep -v ".so") 2>&1)
 
 		### If error occured then dependency exists on AUR
 		if [ "$?" -gt "0" ]; then
 			### Check if dependency is a shared library
 			### If dependency is shared object skip, else fork into build_install to build AUR dependency
-			if ! (awk '{print $5}' <<<"$depends_list" | tr '\n' ' ' | grep '^.*\.so'); then
+			if ! (awk '{print $5}' <<<"$depends_list" | grep ".so"); then
 				alog "found AUR depends for $pkgname: $(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')"
 				if [ $(awk '{print $5}' <<<"$depends_list" | sed 's/>.*//;s/<.*//' | tr '\n' ' ' | wc -w) -gt "1" ]; then
 					echo -e "\n${Y} |${M}<${Y}${B}#${G}- ${M}AUR dependencies found for $pkgname: ${G}$(awk '{print $5}' <<<"$depends_list" | tr '\n' ' ')${CO}"
